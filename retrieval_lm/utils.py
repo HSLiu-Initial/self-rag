@@ -1,7 +1,8 @@
-import jsonlines
-import json
 import copy
+import json
 import re
+
+import jsonlines
 
 PROMPT_DICT = {
     "prompt_input": (
@@ -31,14 +32,15 @@ PROMPT_DICT = {
     ),
 }
 
-TASK_INST = {"wow": "Given a chat history separated by new lines, generates an informative, knowledgeable and engaging response. ",
-             "fever": "Is the following statement correct or not? Say true if it's correct; otherwise say false.",
-             "eli5": "Provide a paragraph-length response using simple words to answer the following question.",
-             "obqa": "Given four answer candidates, A, B, C and D, choose the best answer choice.",
-             "arc_easy": "Given four answer candidates, A, B, C and D, choose the best answer choice.",
-             "arc_c": "Given four answer candidates, A, B, C and D, choose the best answer choice.",
-             "trex": "Given the input format 'Subject Entity [SEP] Relationship Type,' predict the target entity.",
-             "asqa": "Answer the following question. The question may be ambiguous and have multiple correct answers, and in that case, you have to provide a long-form answer including all correct answers."}
+TASK_INST = {
+    "wow": "Given a chat history separated by new lines, generates an informative, knowledgeable and engaging response. ",
+    "fever": "Is the following statement correct or not? Say true if it's correct; otherwise say false.",
+    "eli5": "Provide a paragraph-length response using simple words to answer the following question.",
+    "obqa": "Given four answer candidates, A, B, C and D, choose the best answer choice.",
+    "arc_easy": "Given four answer candidates, A, B, C and D, choose the best answer choice.",
+    "arc_c": "Given four answer candidates, A, B, C and D, choose the best answer choice.",
+    "trex": "Given the input format 'Subject Entity [SEP] Relationship Type,' predict the target entity.",
+    "asqa": "Answer the following question. The question may be ambiguous and have multiple correct answers, and in that case, you have to provide a long-form answer including all correct answers."}
 
 rel_tokens_names = ["[Irrelevant]", "[Relevant]"]
 retrieval_tokens_names = ["[No Retrieval]",
@@ -49,41 +51,63 @@ ground_tokens_names = ["[Fully supported]",
                        "[Partially supported]", "[No support / Contradictory]"]
 other_special_tokens = ["<s>", "</s>", "[PAD]",
                         "<unk>", "<paragraph>", "</paragraph>"]
-control_tokens = ["[Fully supported]", "[Partially supported]", "[No support / Contradictory]", "[No Retrieval]", "[Retrieval]",
-                  "[Irrelevant]", "[Relevant]", "<paragraph>", "</paragraph>", "[Utility:1]", "[Utility:2]", "[Utility:3]", "[Utility:4]", "[Utility:5]"]
+control_tokens = ["[Fully supported]", "[Partially supported]", "[No support / Contradictory]", "[No Retrieval]",
+                  "[Retrieval]",
+                  "[Irrelevant]", "[Relevant]", "<paragraph>", "</paragraph>", "[Utility:1]", "[Utility:2]",
+                  "[Utility:3]", "[Utility:4]", "[Utility:5]"]
 
 
+# 定义函数load_special_tokens，接受分词器和两个布尔值作为参数。
+# use_grounding和use_utility参数用于控制是否加载特定类型的特殊令牌。
 def load_special_tokens(tokenizer, use_grounding=False, use_utility=False):
+    # 创建ret_tokens字典，包含检索令牌（retrieval_tokens）的名称和相应的ID。
+    # 这些令牌可能用于标识和处理文本检索相关的任务。
+    # retrieval_tokens_names在上面，是一个list，包含了三个令牌的名称。
     ret_tokens = {token: tokenizer.convert_tokens_to_ids(
         token) for token in retrieval_tokens_names}
+
+    # 创建rel_tokens字典，用于存储与文本相关性相关的特殊令牌及其ID。
+    # 这里包括了[Irrelevant]和[Relevant]两个令牌。
     rel_tokens = {}
     for token in ["[Irrelevant]", "[Relevant]"]:
         rel_tokens[token] = tokenizer.convert_tokens_to_ids(token)
 
+    # 初始化grd_tokens为None。如果use_grounding为True，
+    # 则为每个ground_tokens中的令牌生成一个ID，并存储在grd_tokens字典中。
+    # 这些令牌可能用于处理与“grounding”（基础事实或知识）相关的任务。
     grd_tokens = None
     if use_grounding is True:
         grd_tokens = {}
         for token in ground_tokens_names:
             grd_tokens[token] = tokenizer.convert_tokens_to_ids(token)
 
+    # 初始化ut_tokens为None。如果use_utility为True，
+    # 则为每个utility_tokens中的令牌生成一个ID，并存储在ut_tokens字典中。
+    # 这些令牌可能用于处理实用性或效用相关的任务。
     ut_tokens = None
     if use_utility is True:
         ut_tokens = {}
         for token in utility_tokens_names:
             ut_tokens[token] = tokenizer.convert_tokens_to_ids(token)
 
+    # 函数返回四个令牌字典：检索令牌、相关性令牌、grounding令牌和utility令牌。
     return ret_tokens, rel_tokens, grd_tokens, ut_tokens
 
 
 def fix_spacing(input_text):
+    """
+    在句号（.）、感叹号（!）或问号（?）之后，如果没有空格，就添加一个空格。
+    """
     # Add a space after periods that lack whitespace
     output_text = re.sub(r'(?<=\w)([.!?])(?=\w)', r'\1 ', input_text)
     return output_text
 
 
 def postprocess(pred):
-    special_tokens = ["[Fully supported]", "[Partially supported]", "[No support / Contradictory]", "[No Retrieval]", "[Retrieval]",
-                      "[Irrelevant]", "[Relevant]", "<paragraph>", "</paragraph>", "[Utility:1]", "[Utility:2]", "[Utility:3]", "[Utility:4]", "[Utility:5]"]
+    special_tokens = ["[Fully supported]", "[Partially supported]", "[No support / Contradictory]", "[No Retrieval]",
+                      "[Retrieval]",
+                      "[Irrelevant]", "[Relevant]", "<paragraph>", "</paragraph>", "[Utility:1]", "[Utility:2]",
+                      "[Utility:3]", "[Utility:4]", "[Utility:5]"]
     for item in special_tokens:
         pred = pred.replace(item, "")
     pred = pred.replace("</s>", "")
@@ -144,7 +168,8 @@ def preprocess_input(input_data, task):
 
 def postprocess_output(input_instance, prediction, task, intermediate_results=None):
     if task == "factscore":
-        return {"input": input_instance["input"], "output": prediction, "topic": input_instance["topic"], "cat": input_instance["cat"]}
+        return {"input": input_instance["input"], "output": prediction, "topic": input_instance["topic"],
+                "cat": input_instance["cat"]}
 
     elif task == "qa":
         input_instance["pred"] = prediction
@@ -158,18 +183,20 @@ def postprocess_output(input_instance, prediction, task, intermediate_results=No
             input_instance["output"] = postprocess(prediction)
 
         else:
-            for idx, (sent, doc) in enumerate(zip(intermediate_results["splitted_sentences"][0], intermediate_results["ctxs"][0])):
+            for idx, (sent, doc) in enumerate(
+                    zip(intermediate_results["splitted_sentences"][0], intermediate_results["ctxs"][0])):
                 if len(sent) == 0:
                     continue
                 postprocessed_result = postprocess(sent)
                 final_output += postprocessed_result[:-
-                                                     1] + " [{}]".format(idx) + ". "
+                1] + " [{}]".format(idx) + ". "
                 docs.append(doc)
             if final_output[-1] == " ":
                 final_output = final_output[:-1]
             input_instance["output"] = final_output
         input_instance["docs"] = docs
         return input_instance
+
 
 def process_arc_instruction(item, instruction):
     choices = item["choices"]
@@ -190,7 +217,8 @@ def process_arc_instruction(item, instruction):
 
     if "D" not in answer_labels:
         answer_labels["D"] = ""
-    choices = "\nA: {0}\nB: {1}\nC: {2}\nD: {3}".format(answer_labels["A"], answer_labels["B"], answer_labels["C"], answer_labels["D"])
+    choices = "\nA: {0}\nB: {1}\nC: {2}\nD: {3}".format(answer_labels["A"], answer_labels["B"], answer_labels["C"],
+                                                        answer_labels["D"])
     if "E" in answer_labels:
         choices += "\nE: {}".format(answer_labels["E"])
     processed_instruction = instruction + "\n\n### Input:\n" + item["instruction"] + choices

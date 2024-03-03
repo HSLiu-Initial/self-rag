@@ -1,16 +1,18 @@
 import argparse
-import jsonlines
-from transformers import AutoTokenizer
-import numpy as np
 import json
-import argparse
+
+import jsonlines
+import numpy as np
+from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
+
 from utils import TASK_INST, PROMPT_DICT, load_special_tokens, load_jsonlines, postprocess, fix_spacing
 
 
-def run_step_generation_batch(model, prompt, paragraphs,  max_new_tokens,
+def run_step_generation_batch(model, prompt, paragraphs, max_new_tokens,
                               rel_tokens=None, grd_tokens=None, ret_tokens=None, ut_tokens=None,
                               threshold=None, w_rel=1.0, w_sup=1.0, w_use=0.5, use_seqscore=False):
+    # paragraph就是contexts
     if paragraphs is not None:
         aug_prompts = [prompt + "[Retrieval]" + "<paragraph>{}</paragraph>".format(
             paragraph["title"] + "\n" + paragraph["text"]) for paragraph in paragraphs]
@@ -32,7 +34,7 @@ def run_step_generation_batch(model, prompt, paragraphs,  max_new_tokens,
         pred_text = pred.outputs[0].text
         pred_log_probs = pred.outputs[0].logprobs
         seq_score = pred.outputs[0].cumulative_logprob / \
-            max(len(pred.outputs[0].token_ids), 1)
+                    max(len(pred.outputs[0].token_ids), 1)
         assert len(pred_log_probs) == len(pred_token_ids)
 
         relevance_score_dict.setdefault(p_idx, {})
@@ -75,25 +77,26 @@ def run_step_generation_batch(model, prompt, paragraphs,  max_new_tokens,
         if len(grd_score_dict[p_idx]) == 3:
             gt_sum = np.sum(list(grd_score_dict[p_idx].values()))
             ground_score = (grd_score_dict[p_idx]["[Fully supported]"] / gt_sum) + 0.5 * (
-                grd_score_dict[p_idx]["[Partially supported]"] / gt_sum)
+                    grd_score_dict[p_idx]["[Partially supported]"] / gt_sum)
         else:
             ground_score = 0.0
 
         if len(ut_score_dict[p_idx]) == 5:
             ut_sum = np.sum(list(ut_score_dict[p_idx].values()))
             ut_scores = [-1, -0.5, 0, 0.5, 1]
-            utility_score = np.sum([ut_scores[i] * (ut_score_dict[p_idx]["[Utility:{}]".format(i+1)] / ut_sum)
-                                   if "[Utility:{}]".format(i+1) in ut_score_dict[p_idx] else 0.0 for i in range(0, 5)])
+            utility_score = np.sum([ut_scores[i] * (ut_score_dict[p_idx]["[Utility:{}]".format(i + 1)] / ut_sum)
+                                    if "[Utility:{}]".format(i + 1) in ut_score_dict[p_idx] else 0.0 for i in
+                                    range(0, 5)])
         else:
             utility_score = 0.0
 
         if use_seqscore is True:
-            final_score =np.exp(seq_score) + w_rel * relevance_score + \
-                w_sup * ground_score + w_use * utility_score
+            final_score = np.exp(seq_score) + w_rel * relevance_score + \
+                          w_sup * ground_score + w_use * utility_score
         else:
             final_score = w_rel * relevance_score + \
-                w_sup * ground_score + w_use * utility_score
-            
+                          w_sup * ground_score + w_use * utility_score
+
         overall_scores[p_idx] = {"final_score": final_score,
                                  "relevance_score": relevance_score,
                                  "ground_score": ground_score,
@@ -121,8 +124,10 @@ def run_step_generation_batch(model, prompt, paragraphs,  max_new_tokens,
                     prob = pred_log_probs[idx][tok_id] if tok_id in pred_log_probs[idx] else -100
                     ret_token_score_dict[order][tok] = np.exp(prob)
                 if ret_token_score_dict[order]["[Retrieval]"] + ret_token_score_dict[order]["[No Retrieval]"] != 0.0:
-                    do_retrieve = (ret_token_score_dict[order]["[Retrieval]"] + ret_token_score_dict[order]["[Continue to Use Evidence]"]) / (
-                        ret_token_score_dict[order]["[Retrieval]"] + ret_token_score_dict[order]["[No Retrieval]"]) > threshold
+                    do_retrieve = (ret_token_score_dict[order]["[Retrieval]"] + ret_token_score_dict[order][
+                        "[Continue to Use Evidence]"]) / (
+                                          ret_token_score_dict[order]["[Retrieval]"] + ret_token_score_dict[order][
+                                      "[No Retrieval]"]) > threshold
                 else:
                     do_retrieve = 0.0
                 if do_retrieve > threshold:
@@ -146,13 +151,21 @@ def run_step_generation_batch(model, prompt, paragraphs,  max_new_tokens,
 
 
 def call_model_beam_batch(prompt, model, max_new_tokens=15, ctxs=None, query=None, max_depth=5, rel_tokens=None,
-                          grd_tokens=None, ret_tokens=None, threshold=None, beam_width=2, ut_tokens=None, use_seqscore=False,
+                          grd_tokens=None, ret_tokens=None, threshold=None, beam_width=2, ut_tokens=None,
+                          use_seqscore=False,
                           w_rel=1.0, w_sup=1.0, w_use=0.5, ignore_cont=False, mode="adaptive_retrieval"):
     special_tokens = []
+    # 如果查询字符串中包含"## Input:\n\n"，则将查询内容分割并取其后半部分。
+    # 这通常用于处理包含特定标记的文本，从而只关注标记后的内容。
     if "## Input:\n\n" in query:
         query = query.split("## Input:\n\n")[1]
+    # 如果rel_tokens（相关令牌）不为空，提取其所有键并存储在special_tokens列表中。
+    # 这可能用于识别特定的关键词或令牌。
+    # key是对应tokens的字符串，value是ids
     if rel_tokens is not None:
         special_tokens = list(rel_tokens.keys())
+    # 如果ret_tokens（返回令牌）不为空，将其所有键添加到special_tokens列表中。
+    # 这同样可能用于识别特定的关键词或令牌。
     if ret_tokens is not None:
         special_tokens += list(ret_tokens.keys())
 
@@ -168,9 +181,9 @@ def call_model_beam_batch(prompt, model, max_new_tokens=15, ctxs=None, query=Non
     if mode == "always_retrieve":
         do_retrieve = True
 
-    else:
+    else:  # mode == "adaptive_retrieval" 这一段代码用来判断是否做检索
         sampling_params = SamplingParams(
-            temperature=0.0, top_p=1, max_tokens=25, logprobs=32000)
+            temperature=0.0, top_p=1, max_tokens=25, logprobs=32000)  # logprobs=32000 会返回最可能的32000个token的对数概率
         preds = model.generate([prompt], sampling_params)
         pred_log_probs = preds[0].outputs[0].logprobs
         preds = [pred.outputs[0].text.split("\n\n")[0] for pred in preds]
@@ -185,51 +198,60 @@ def call_model_beam_batch(prompt, model, max_new_tokens=15, ctxs=None, query=Non
                     prob = pred_log_probs[0][tok_id]
                     ret_token_score_dict[tok] = np.exp(prob)
                 retrieve_prob = ret_token_score_dict["[Retrieval]"] / (
-                    ret_token_score_dict["[Retrieval]"] + ret_token_score_dict["[No Retrieval]"])
+                        ret_token_score_dict["[Retrieval]"] + ret_token_score_dict["[No Retrieval]"])
                 do_retrieve = True if retrieve_prob > threshold else False
 
     if do_retrieve is False:
         sampling_params = SamplingParams(
             temperature=0.0, top_p=1, max_tokens=max_new_tokens)
-        prompt += "[No Retrieval]"
+        prompt += "[No Retrieval]"  # 如果不进行检索就直接用原来的prompt接着[No Retrieval]进行检索
         preds = model.generate([prompt], sampling_params)
         preds = [pred.outputs[0].text.split("\n\n")[0] for pred in preds]
         prediction_tree = {}
         return preds[0], prediction_tree
     elif do_retrieve is True:
-        curr_depth = 1
-        terminated = False
-        node_id = 0
-        prediction_tree = {}
-        levels = {}
+        # 如果需要进行检索
+        curr_depth = 1  # 当前的深度
+        terminated = False  # 表示是否终止
+        node_id = 0  # 节点的ID
+        prediction_tree = {}  # 预测树，用于存储预测结果
+        levels = {}  # 存储各层级的节点
+        # 初始化预测树的根节点
         prediction_tree[node_id] = {"prompt": prompt, "pred": "[Retrieval]",
                                     "processed_pred": "", "score": None, "ctx": None, "parent": None}
-        levels[0] = [0]
+        levels[0] = [0]  # 根节点位于第0层
+
+        # 当当前深度小于最大深度时进行循环
         while curr_depth < max_depth:
             levels[curr_depth] = []
-            if curr_depth-1 in levels and terminated is False:
-                for node in levels[curr_depth-1]:
+            # 如果上一层存在且没有终止
+            if curr_depth - 1 in levels and terminated is False:
+                # 遍历上一层的所有节点
+                for node in levels[curr_depth - 1]:
                     pred = prediction_tree[node]["pred"]
                     if pred == "</s>":
+                        # 如果预测结果是结束符号，则标记终止并继续
                         terminated = True
                         continue
                     prompt = prediction_tree[node]["prompt"]
                     prev_generation = prediction_tree[node]["processed_pred"]
                     score = prediction_tree[node]["score"]
+                    # 如果需要检索
                     if "[Retrieval]" in pred:
                         retrieval_results = {}
+                        # 执行一步生成操作
                         preds, scores, overall_score_dict = run_step_generation_batch(
                             model, prompt + prev_generation, ctxs, max_new_tokens,
                             rel_tokens, ret_tokens=ret_tokens, grd_tokens=grd_tokens, ut_tokens=ut_tokens,
                             threshold=threshold, w_rel=w_rel, w_sup=w_sup, w_use=w_use)
+                        # 处理检索结果
                         for i, (pred, p_score) in enumerate(zip(preds, scores)):
-                            retrieval_results[i] = {
-                                "pred": pred, "score": p_score}
+                            retrieval_results[i] = {"pred": pred, "score": p_score}
 
+                        # 对检索结果进行处理和存储
                         for i, result in retrieval_results.items():
                             node_id += 1
-                            node_score = result["score"] * \
-                                score if score is not None else result["score"]
+                            node_score = result["score"] * score if score is not None else result["score"]
                             pred = result["pred"]
                             prediction_tree[node_id] = {"prompt": prompt + prev_generation, "pred": pred,
                                                         "score": node_score, "ctx": ctxs[i], "parent": node,
@@ -243,11 +265,10 @@ def call_model_beam_batch(prompt, model, max_new_tokens=15, ctxs=None, query=Non
                             prediction_tree[node_id]["processed_pred"] = prev_generation
                             levels[curr_depth].append(node_id)
 
+                # 评估当前层的节点并选择得分最高的一些节点
                 current_rank = levels[curr_depth]
-                node2score = {
-                    node_id: prediction_tree[node_id]["score"] for node_id in current_rank}
-                top_nodes = sorted(node2score.items(), key=lambda x: x[1], reverse=True)[
-                    :beam_width]
+                node2score = {node_id: prediction_tree[node_id]["score"] for node_id in current_rank}
+                top_nodes = sorted(node2score.items(), key=lambda x: x[1], reverse=True)[:beam_width]
                 levels[curr_depth] = [node[0] for node in top_nodes]
                 curr_depth += 1
             else:
@@ -278,14 +299,24 @@ def call_model_beam_batch(prompt, model, max_new_tokens=15, ctxs=None, query=Non
     original_splitted_sentences = {}
     ctxs = {}
     for path_i, nodes in best_selections.items():
-        final_prediction[path_i] = " ".join([prediction_tree[node]["processed_pred"] for node in nodes if node is not None and (
-            ignore_cont is False or (ignore_cont is True and "[No support / Contradictory]" not in prediction_tree[node]["processed_pred"]))])
-        splitted_sentences[path_i] = [prediction_tree[node]["processed_pred"] for node in nodes if node is not None and (
-            ignore_cont is False or (ignore_cont is True and "[No support / Contradictory]" not in prediction_tree[node]["processed_pred"]))]
+        final_prediction[path_i] = " ".join(
+            [prediction_tree[node]["processed_pred"] for node in nodes if node is not None and (
+                    ignore_cont is False or (
+                    ignore_cont is True and "[No support / Contradictory]" not in prediction_tree[node][
+                "processed_pred"]))])
+        splitted_sentences[path_i] = [prediction_tree[node]["processed_pred"] for node in nodes if
+                                      node is not None and (
+                                              ignore_cont is False or (
+                                              ignore_cont is True and "[No support / Contradictory]" not in
+                                              prediction_tree[node]["processed_pred"]))]
         original_splitted_sentences[path_i] = [prediction_tree[node]["pred"] for node in nodes if node is not None and (
-            ignore_cont is False or (ignore_cont is True and "[No support / Contradictory]" not in prediction_tree[node]["processed_pred"]))]
-        ctxs[path_i] = [prediction_tree[node]["ctx"] for node in nodes if node is not None and (ignore_cont is False or (
-            ignore_cont is True and "[No support / Contradictory]" not in prediction_tree[node]["processed_pred"]))]
+                ignore_cont is False or (
+                ignore_cont is True and "[No support / Contradictory]" not in prediction_tree[node][
+            "processed_pred"]))]
+        ctxs[path_i] = [prediction_tree[node]["ctx"] for node in nodes if
+                        node is not None and (ignore_cont is False or (
+                                ignore_cont is True and "[No support / Contradictory]" not in prediction_tree[node][
+                            "processed_pred"]))]
 
     result = {"final_prediction": final_prediction,
               "splitted_sentences": splitted_sentences,
@@ -310,9 +341,9 @@ def main():
                         default=".cache")
     parser.add_argument("--ndocs", type=int, default=10,
                         help="Number of documents to retrieve per questions")
-    parser.add_argument("--world_size",  type=int, default=1,
+    parser.add_argument("--world_size", type=int, default=1,
                         help="world size to use multiple GPUs.")
-    parser.add_argument("--dtype",  type=str, default="half",
+    parser.add_argument("--dtype", type=str, default="half",
                         help="We use bfloat16 for training. If you run inference on GPUs that do not support BF16, please set this to be `half`.")
     # Decoding hyperparams
     parser.add_argument('--threshold', type=float,
@@ -322,20 +353,20 @@ def main():
     parser.add_argument("--use_seqscore", action="store_true", help="use sequence scores.")
     parser.add_argument(
         "--use_utility", action="store_true", help="tree search")
-    parser.add_argument("--beam_width",  type=int,
+    parser.add_argument("--beam_width", type=int,
                         default=2, help="beam search width")
-    parser.add_argument("--max_depth",  type=int,
+    parser.add_argument("--max_depth", type=int,
                         default=2, help="tree depth width")
-    parser.add_argument("--w_rel",  type=float, default=1.0,
+    parser.add_argument("--w_rel", type=float, default=1.0,
                         help="reward weight for document relevance")
-    parser.add_argument("--w_sup",  type=float, default=1.0,
+    parser.add_argument("--w_sup", type=float, default=1.0,
                         help="reward weight for generation support (attribution)")
-    parser.add_argument("--w_use",  type=float, default=1.0,
+    parser.add_argument("--w_use", type=float, default=1.0,
                         help="reward weight for overall completeness / utility.")
     parser.add_argument("--ignore_cont", action="store_true",
                         help="filter out sentences that include [No support / Contradictory] ")
     parser.add_argument('--mode', type=str, help="mode to control retrieval.",
-                        default="default", choices=['adaptive_retrieval', 'no_retrieval', 'always_retrieve'],)
+                        default="default", choices=['adaptive_retrieval', 'no_retrieval', 'always_retrieve'], )
 
     args = parser.parse_args()
 
@@ -348,22 +379,28 @@ def main():
 
     if args.world_size is not None:
         model = LLM(model=args.model_name, download_dir=args.download_dir,
-                    dtype=args.dtype, tensor_parallel_size=args.world_size,)
+                    dtype=args.dtype, tensor_parallel_size=args.world_size, )
 
     else:
         model = LLM(model=args.model_name,
                     download_dir=args.download_dir, dtype=args.dtype)
 
-    def generate(prompt, ctxs, max_new_tokens):
+    def generate(prompt: str, ctxs: list[dict], max_new_tokens: int, ):
+        """"
+        Prompt: Instruction+问题
+        CTXS: 检索回来的文档
+        """
         processed_prompt = PROMPT_DICT["prompt_no_input"].format_map(
-            {"instruction": prompt})
-        return call_model_beam_batch(processed_prompt, model=model, max_new_tokens=max_new_tokens, ctxs=ctxs, query=prompt,
-                                     rel_tokens=rel_tokens, ret_tokens=ret_tokens, grd_tokens=grd_tokens, ut_tokens=ut_tokens,
-                                     use_seqscore=args.use_seqscore, threshold=args.threshold, 
+            {"instruction": prompt})  # 生成prompt
+        return call_model_beam_batch(processed_prompt, model=model, max_new_tokens=max_new_tokens, ctxs=ctxs,
+                                     query=prompt,
+                                     rel_tokens=rel_tokens, ret_tokens=ret_tokens, grd_tokens=grd_tokens,
+                                     ut_tokens=ut_tokens,
+                                     use_seqscore=args.use_seqscore, threshold=args.threshold,
                                      beam_width=args.beam_width, max_depth=args.max_depth,
                                      w_rel=1.0, w_sup=1.0, w_use=0.5, mode=args.mode, ignore_cont=args.ignore_cont, )
 
-    input_path = args.input_file
+    input_path = args.input_file  # 数据文件的位置
     if input_path.endswith(".json"):
         input_data = json.load(open(input_path))
     else:
@@ -374,7 +411,7 @@ def main():
         for idx, item in enumerate(input_data):
             prompt = item["input"]
             ctxs = item["ctxs"][:args.ndocs]
-            result, intermediate = generate(prompt, ctxs, args.max_new_tokens,)
+            result, intermediate = generate(prompt, ctxs, args.max_new_tokens, )
             postprocessed_result = fix_spacing(postprocess(result[0]))
             new_results.append({"input": item["input"], "output": postprocessed_result, "topic": item["topic"],
                                 "cat": item["cat"], "intermediate": intermediate["original_splitted_sentences"][0]})
@@ -388,18 +425,18 @@ def main():
         new_results = {"data": [], "args": [],
                        "total_cost": 0.0, "azure_filter_fail": ""}
         for instance_idx, item in enumerate(input_data):
-            prompt = item["question"]
-            ctxs = item["docs"][:args.ndocs]
-            instructions = TASK_INST[args.task]
+            prompt = item["question"]  # 就是一个问题
+            ctxs = item["docs"][:args.ndocs]  # 默认是5
+            instructions = TASK_INST[args.task]  # 每个任务会给定一个instruction 比如ASQA会告诉他是ambiguous的问题
             prev_gen = []
             prompt = instructions + "## Input:\n\n" + prompt
             final_pred, intermediate = generate(
-                prompt, ctxs, args.max_new_tokens,)
+                prompt, ctxs, args.max_new_tokens, )
             final_output = ""
             docs = []
             prev_gen = []
             if "splitted_sentences" not in intermediate:
-                item["output"] = postprocess(final_pred)
+                item["output"] = postprocess(final_pred) # 把special tokens的</s>去掉
             else:
                 if len(postprocess(final_pred[0])) == 0:
                     intermediate["splitted_sentences"][0], intermediate["ctxs"][
@@ -413,14 +450,14 @@ def main():
                     else:
                         prev_gen.append(postprocessed_result)
                     final_output += postprocessed_result[:-
-                                                         1] + " [{}]".format(idx) + ". "
+                    1] + " [{}]".format(idx) + ". "
                     docs.append(doc)
                 if len(final_output) == 0:
                     item["output"] = fix_spacing(final_output)
                 if len(final_output) > 0 and final_output[-1] == " ":
                     final_output = final_output[:-1]
                 item["output"] = fix_spacing(final_output)
-                item["output"] = item["output"].replace(
+                item["output"] = item["output"].replace( # 修正一些格式
                     ".[Continue to Use Evidence]", " [1]. ")
                 item["output"] = item["output"].replace(". [1] ", " [1]. ")
             item["docs"] = docs
